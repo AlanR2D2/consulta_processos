@@ -13,14 +13,23 @@ Rodar:  python -m src.web
 
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 import threading
 
-from flask import Flask, jsonify, redirect, render_template_string, request, url_for
+from flask import (
+    Flask,
+    jsonify,
+    redirect,
+    render_template_string,
+    request,
+    session,
+    url_for,
+)
 from markupsafe import Markup
 
-from src.config import _clean, _get, configure_logging
+from src.config import _clean, _get, configure_logging, settings
 from src.datajud.endpoints import CNJInvalido, SegmentoNaoSuportado
 from src.formato import data_br
 from src.repository import movimentacoes as repo_mov
@@ -33,6 +42,71 @@ configure_logging()
 app = Flask(__name__)
 app.secret_key = _get("FLASK_SECRET_KEY") or "dev-secret"
 logger = logging.getLogger("web")
+
+# Endpoints liberados sem login (health p/ healthcheck do Docker; login e estáticos).
+_PUBLICO = {"login", "health", "static"}
+
+
+def _credenciais_ok(email: str, senha: str) -> bool:
+    """Confere e-mail/senha contra o .env, em tempo constante."""
+    if not settings.auth_email or not settings.auth_password:
+        return False  # auth não configurada → nega (evita app aberto por engano)
+    email_ok = hmac.compare_digest(email.strip().lower(), settings.auth_email.strip().lower())
+    senha_ok = hmac.compare_digest(senha, settings.auth_password)
+    return email_ok and senha_ok
+
+
+@app.before_request
+def _exigir_login():
+    if request.endpoint in _PUBLICO or session.get("logado"):
+        return None
+    if request.is_json:
+        return jsonify(erro="não autenticado"), 401
+    return redirect(url_for("login", next=request.path))
+
+
+_LOGIN_HTML = """
+<!doctype html><html lang=pt-br><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width, initial-scale=1"><title>Entrar</title>
+<style>body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;display:grid;
+place-items:center;height:100vh;margin:0}
+form{background:#1e293b;padding:2rem;border-radius:14px;border:1px solid #334155;width:320px}
+h1{font-size:1.1rem;margin:0 0 1rem}
+input{width:100%;box-sizing:border-box;padding:.6rem .7rem;margin:.35rem 0;border-radius:8px;
+border:1px solid #475569;background:#0b1220;color:#e2e8f0}
+button{width:100%;padding:.6rem;margin-top:.6rem;border:0;border-radius:8px;cursor:pointer;
+background:#2563eb;color:#fff;font-weight:600}
+.err{background:#991b1b;padding:.5rem .7rem;border-radius:8px;font-size:.85rem;margin-bottom:.5rem}
+</style></head><body>
+<form method=post>
+  <h1>⚖️ Monitor de Processos</h1>
+  {% if erro %}<div class=err>{{ erro }}</div>{% endif %}
+  <input type=email name=email placeholder="E-mail" autofocus required>
+  <input type=password name=senha placeholder="Senha" required>
+  <button type=submit>Entrar</button>
+</form></body></html>
+"""
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    erro = None
+    if request.method == "POST":
+        email = request.form.get("email") or ""
+        senha = request.form.get("senha") or ""
+        if _credenciais_ok(email, senha):
+            session["logado"] = True
+            session["email"] = email.strip().lower()
+            destino = request.args.get("next") or url_for("index")
+            return redirect(destino)
+        erro = "E-mail ou senha inválidos."
+    return render_template_string(_LOGIN_HTML, erro=erro)
+
+
+@app.post("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 # Sincronização roda em background (são muitos processos; uma request síncrona
 # travaria o navegador). Um único sync por vez.
@@ -106,7 +180,13 @@ _INDEX = """
   </style>
 </head>
 <body>
-  <header><h1>⚖️ Monitor de Processos Judiciais — DataJud → Supabase</h1></header>
+  <header style="display:flex;justify-content:space-between;align-items:center">
+    <h1>⚖️ Monitor de Processos Judiciais — DataJud → Supabase</h1>
+    <form method="post" action="{{ url_for('logout') }}" style="margin:0">
+      <span class="muted" style="margin-right:.6rem">{{ email }}</span>
+      <button type="submit" style="background:#334155;padding:.4rem .7rem">Sair</button>
+    </form>
+  </header>
   <main>
     {% if msg %}<div class="flash">{{ msg }}</div>{% endif %}
     {% if sync_rodando %}<div class="flash" style="background:#1d4ed8">↻ Sincronização em andamento em background…</div>{% endif %}
@@ -226,6 +306,7 @@ def index():
         f=filtros,
         filtrando=filtrando,
         pagina_url=pagina_url,
+        email=session.get("email", ""),
     )
 
 

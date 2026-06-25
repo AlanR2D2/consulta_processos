@@ -46,6 +46,8 @@ class Settings:
     sync_batch_size: int
     request_timeout: int
     max_retries: int
+    auth_email: str
+    auth_password: str
 
     def validate(self) -> None:
         """Falha cedo se faltar credencial essencial do Supabase."""
@@ -75,6 +77,8 @@ def load_settings() -> Settings:
         sync_batch_size=int(_get("SYNC_BATCH_SIZE") or "50"),
         request_timeout=int(_get("REQUEST_TIMEOUT") or "30"),
         max_retries=int(_get("MAX_RETRIES") or "3"),
+        auth_email=_get("AUTH_EMAIL") or "",
+        auth_password=_get("AUTH_PASSWORD") or "",
     )
 
 
