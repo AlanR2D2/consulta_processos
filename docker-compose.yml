@@ -1,0 +1,26 @@
+# Sobe o dashboard/sync do Monitor de Processos.
+#
+# IMPORTANTE (segurança): a aplicação web NÃO tem autenticação. Por padrão ela é
+# publicada só em 127.0.0.1 (acessível via túnel SSH ou atrás do seu reverse proxy).
+# Para expor publicamente, coloque-a atrás do seu proxy (n8n/Caddy/Traefik) COM auth,
+# ou mude WEB_BIND para 0.0.0.0 por sua conta e risco.
+#
+# Porta e bind são configuráveis pelo .env (WEB_PORT / WEB_BIND) para não conflitar
+# com o que já roda no servidor (ex.: n8n). Ajuste WEB_PORT após inspecionar as portas.
+
+services:
+  web:
+    build: .
+    image: consulta-processos:latest
+    container_name: consulta_processos_web
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8090}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

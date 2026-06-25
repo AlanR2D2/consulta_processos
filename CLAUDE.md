@@ -237,8 +237,11 @@ MAX_RETRIES=3
 ├── .env                      # NÃO versionar (já tem credenciais Supabase + DataJud)
 ├── .env.example
 ├── .gitignore
-├── requirements.txt          # versões fixadas
+├── requirements.txt          # versões fixadas (inclui gunicorn p/ prod)
 ├── pyproject.toml            # config Ruff + pytest (pythonpath = ".")
+├── Dockerfile                # imagem prod (gunicorn) — src/web:app
+├── docker-compose.yml        # deploy (porta/bind via WEB_PORT/WEB_BIND no .env)
+├── .dockerignore
 ├── migrations/
 │   ├── 001_init.sql          # DDL das 4 tabelas (rodar no SQL Editor do Supabase)
 │   ├── 002_sync_status.sql   # + colunas ultimo_sync_status / ultimo_sync_detalhe
@@ -341,6 +344,25 @@ chamando `python -m src.main sync`. Exemplo cron (2x/dia):
 0 8,18 * * * cd /caminho/projeto && .venv/bin/python -m src.main sync >> sync.log 2>&1
 ```
 
+### Deploy com Docker (servidor)
+
+`Dockerfile` (gunicorn) + `docker-compose.yml`. A app web **não tem autenticação**, então o
+compose publica só em `127.0.0.1:${WEB_PORT}` por padrão — acesse via túnel SSH ou atrás de um
+reverse proxy com auth. Ajuste `WEB_PORT` no `.env` para uma porta livre (não conflitar com n8n).
+
+```bash
+# No servidor, em ~/consulta_processos:
+git pull                       # ou clonar o repo
+cp .env.example .env           # e preencher SUPABASE_*/DATAJUD_* + WEB_PORT/WEB_BIND
+docker compose up -d --build   # sobe o container 'consulta_processos_web'
+docker compose logs -f         # acompanhar
+# Acesso local/túnel:  http://127.0.0.1:${WEB_PORT}
+# Túnel SSH a partir da sua máquina:  ssh -L 8090:127.0.0.1:8090 root@SERVIDOR
+```
+
+`migrations/` ficam disponíveis no container, mas as tabelas são criadas uma vez no Supabase
+(SQL Editor). A rede do compose é isolada (bridge própria) — não interfere no n8n.
+
 ---
 
 ## Convenções de código
@@ -385,6 +407,7 @@ chamando `python -m src.main sync`. Exemplo cron (2x/dia):
 - **2026-06-23** — Status por processo (`ultimo_sync_status`/`ultimo_sync_detalhe`, migration 002) + sync **unitário** (`sincronizar_um`, rota `POST /processos/<id>/sync`). *Motivo:* o usuário pediu atualizar 1 processo isolado e ver sigilo/erro tanto no unitário quanto no geral. `repository.processos.marcar_status` é **resiliente**: se a migration 002 não foi aplicada, avisa e segue sem quebrar o sync (status persiste só após a migration; o feedback imediato no unitário independe dela).
 - **2026-06-23** — `src/formato.py::data_br()` formata datas para exibição (ISO/UTC → `dd/mm/aaaa HH:MM:SS` no fuso de São Paulo), aplicado na web e na CLI `list`. *Motivo:* as datas vinham em ISO/UTC; usuário pediu pt-BR no horário de SP. Usa `zoneinfo` (dep `tzdata` p/ Windows) com fallback fixo UTC-3 (Brasil sem DST desde 2019).
 - **2026-06-23** — Dashboard ganhou **cards de resumo** e **filtros** server-side (número, tribunal, classe, status), preservados na paginação. Contagens via `count='exact'`; filtros na query Supabase (`listar_filtrado`/`contar_filtrado`). Cards são links que aplicam o filtro.
+- **2026-06-25** — **Docker/compose para deploy**: `Dockerfile` (python:3.12-slim + gunicorn, 1 worker/4 threads, serve `src.web:app`), `docker-compose.yml` (publica só em `127.0.0.1:${WEB_PORT}` por padrão pois a app não tem auth; rede bridge isolada p/ não afetar o n8n), `.dockerignore`. `gunicorn` no requirements. Deploy: `docker compose up -d --build` em `~/consulta_processos` no servidor.
 - **2026-06-25** — **DJEN da carteira volta a ser POR PROCESSO** (sem exigir gestão de OAB). *Motivo:* a busca por OAB traz tudo do advogado (inclusive parte contrária / processos fora da carteira → ~28k "não cadastrados" no teste) e exige o usuário curar uma lista de OABs. Para uma **carteira fechada**, o DJEN por processo é direcionado e sem responsabilidade extra. Web "Atualizar TODOS" = `sincronizar(incluir_djen=True)` (DataJud em lote + DJEN por processo, em background). A infra de OAB (`sincronizar_djen_por_oab`, `repository/oabs.py`, `promad_oabs`/migration 004, CLI `oab`/`sync-djen`) **fica como opcional/avançada** — útil p/ descobrir processos novos da OAB, fora do escopo da carteira; não é mais surfada na UI.
 - **2026-06-25** — (revertido no mesmo dia) Sync DJEN em lote por OAB (`sincronizar_djen_por_oab`) + tabela `promad_oabs`. Validado tecnicamente (OAB 516085/SP = 583 pub/87 processos em ~6 req), mas trazia ruído e responsabilidade — ver entrada acima.
 - **2026-06-24** — **DJEN/Comunica como 2ª fonte** (complementar ao DataJud): `src/djen/` (client+parser), `repository/publicacoes.py`, tabela `promad_publicacoes_djen` + coluna `ultima_publicacao_data` (migration 003). Integrado no sync unitário e geral (`incluir_djen`). *Motivo:* o DataJud é defasado e não traz intimações/publicações; processos novos apareciam "sem dados" embora tivessem publicações no DJEN (confirmado ao vivo: `4000485-92.2026.8.26.0430` = 0 no DataJud, 2 no DJEN). API pública `comunicaapi.pje.jus.br`, sem auth, por número de processo. `derivar_status` passou a contar **com_dados = movimentação OU publicação**. Resiliente se a migration 003 não estiver aplicada.
