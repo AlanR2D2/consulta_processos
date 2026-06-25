@@ -1,0 +1,25 @@
+# Segredos — NUNCA versionar
+.env
+
+# Dados de entrada / carteira do cliente (números reais de processos) — não versionar
+processos.md
+*.carteira.md
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Logs
+*.log
+sync.log
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
